@@ -413,30 +413,30 @@ function TutorHome({
       </section>
 
       <section className="mt-5 overflow-hidden rounded-[30px] border-2 border-pink-500 bg-white shadow-xl shadow-pink-600/10">
-        <div className="relative h-[330px] overflow-hidden bg-gradient-to-br from-pink-500 via-fuchsia-500 to-pink-700 px-6 pt-10 text-white">
+        <div className="relative h-[318px] overflow-hidden bg-gradient-to-br from-pink-500 via-fuchsia-500 to-pink-700 px-5 pt-8 text-white">
           <span className="absolute right-8 top-8 text-5xl text-white/15">📖</span>
           <span className="absolute right-12 top-32 text-4xl text-white/15">Hi!</span>
           <span className="absolute left-7 bottom-20 h-20 w-20 rounded-full border-2 border-dashed border-white/15" />
-          <div className="absolute bottom-6 -left-3 h-[218px] w-[182px] float-soft">
+          <div className="absolute bottom-20 left-5 h-[116px] w-[116px] overflow-hidden rounded-full border-[5px] border-white/80 bg-pink-100 shadow-2xl shadow-pink-950/20 float-soft">
             <Image
               src={student.avatar}
               alt="Tutora Lorena"
               fill
               priority
-              sizes="190px"
-              className="object-contain object-bottom"
+              sizes="116px"
+              className="object-cover object-top"
             />
           </div>
 
-          <div className="relative ml-[132px]">
-            <p className="flex items-center gap-2 text-sm font-medium text-pink-50">
-              <span className="h-3 w-3 rounded-full bg-lime-400" />
-              Seu tutor de História e Inglês
+          <div className="relative ml-[124px] max-w-[190px]">
+            <p className="flex items-start gap-2 text-[12px] font-semibold leading-tight text-pink-50">
+              <span className="mt-0.5 h-3 w-3 shrink-0 rounded-full bg-lime-400" />
+              <span>Seu tutor de História e Inglês</span>
             </p>
-            <h2 className="mt-6 text-[34px] font-black leading-tight tracking-tight">
+            <h2 className="mt-5 text-[31px] font-black leading-[1.06] tracking-tight">
               Oi, Lorena! <span aria-hidden>👋</span>
             </h2>
-            <p className="mt-3 text-[22px] leading-tight text-pink-50">
+            <p className="mt-3 text-[19px] leading-tight text-pink-50">
               Em que posso te ajudar hoje?
             </p>
           </div>
