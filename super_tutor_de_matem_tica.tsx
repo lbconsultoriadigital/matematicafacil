@@ -142,6 +142,7 @@ const pcmToWavBlob = (pcmBytes, sampleRate = 24000, channels = 1, bitsPerSample 
 };
 
 export default function App() {
+  const lucasAvatarSrc = `${import.meta.env.BASE_URL}assets/lucas-avatar.png`;
   const [apiKey, setApiKey] = useState(() => localStorage.getItem('lucas_tutor_api_key') || '');
   const [selectedModel, setSelectedModel] = useState(() => {
     const savedModel = localStorage.getItem('lucas_tutor_model') || DEFAULT_MODEL;
@@ -735,7 +736,7 @@ export default function App() {
                 className="relative h-[58px] w-[58px] overflow-hidden rounded-full border-[4px] border-blue-200 bg-blue-50"
                 title="Ajustes do Lucas"
               >
-                <img src="/assets/lucas-avatar.png" alt="Lucas" className="h-full w-full object-cover object-top" />
+                <img src={lucasAvatarSrc} alt="Lucas" className="h-full w-full object-cover object-top" />
                 <span className="absolute bottom-1 right-1 h-3.5 w-3.5 rounded-full border-2 border-white bg-emerald-500" />
               </button>
             </div>
@@ -792,7 +793,7 @@ export default function App() {
                   <span className="absolute right-8 top-7 text-4xl text-white/20">√a</span>
                   <span className="absolute right-10 top-28 text-3xl text-white/15">a²+b²</span>
                   <span className="absolute left-6 bottom-16 h-20 w-20 rounded-full border-2 border-dashed border-white/15" />
-                  <img src="/assets/lucas-avatar.png" alt="Tutor Lucas" className="absolute -bottom-7 -left-9 w-[210px] max-w-none" />
+                  <img src={lucasAvatarSrc} alt="Tutor Lucas" className="absolute -bottom-7 -left-9 w-[210px] max-w-none" />
 
                   <div className="relative ml-[138px]">
                     <p className="flex items-center gap-2 text-sm text-blue-50">
