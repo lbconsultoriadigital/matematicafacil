@@ -2,6 +2,11 @@
 
 App mobile-first para a Lorena, aluna do 5º ano, com tutores de História e Inglês, missões, figurinhas e pedido de recompensa via WhatsApp.
 
+## Links
+
+- Produção: https://lorenafacil.vercel.app
+- GitHub: https://github.com/lbconsultoriadigital/lorenafacil
+
 ## Stack
 
 - Next.js App Router
@@ -27,6 +32,8 @@ Crie `.env.local` a partir de `.env.example`.
 - `GEMINI_API_KEY`: chave server-side para os agentes.
 - `NEXT_PUBLIC_CONVEX_URL`: URL pública do Convex.
 - `PARENT_WHATSAPP_NUMBER`: número do pai. Padrão: `5511994465011`.
+- `LORENA_ACCESS_PIN`: senha numérica para abrir o app. Padrão temporário: `2505`.
+- `ACCESS_COOKIE_SECRET`: segredo opcional para assinar o cookie de acesso.
 
 ## Convex
 
