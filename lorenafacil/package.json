@@ -5,9 +5,10 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "build:android-web": "CAPACITOR_STATIC_EXPORT=1 NEXT_PUBLIC_API_BASE_URL=https://lorenafacil.vercel.app next build",
     "start": "next start",
     "lint": "eslint",
-    "android:sync": "cap sync android",
+    "android:sync": "npm run build:android-web && cap sync android",
     "android:open": "cap open android",
     "apk:debug": "sh scripts/build-android-apk.sh debug",
     "apk:release": "sh scripts/build-android-apk.sh release",

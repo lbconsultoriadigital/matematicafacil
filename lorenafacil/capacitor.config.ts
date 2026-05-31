@@ -3,10 +3,12 @@ import type { CapacitorConfig } from "@capacitor/cli";
 const config: CapacitorConfig = {
   appId: "br.com.lbconsultoriadigital.lorenafacil",
   appName: "Lorena Fácil",
-  webDir: "public",
+  webDir: "out",
   server: {
+    androidScheme: "https",
     cleartext: false,
-    url: "https://lorenafacil.vercel.app",
+    hostname: "localhost",
+    allowNavigation: ["lorenafacil.vercel.app"],
   },
 };
 

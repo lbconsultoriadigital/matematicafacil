@@ -46,7 +46,7 @@ Depois rode `seed:seedInitialData` no painel/CLI do Convex para popular Lorena, 
 
 ## APK Android
 
-O APK é um wrapper Capacitor do app em produção (`https://lorenafacil.vercel.app`), com ícone personalizado da Lorena e permissões de câmera/microfone.
+O APK usa Capacitor com a interface embutida no aplicativo, ícone personalizado da Lorena e permissões de câmera/microfone. As chamadas do tutor e recompensas continuam usando a API segura da Vercel.
 
 ```bash
 npm run apk:debug

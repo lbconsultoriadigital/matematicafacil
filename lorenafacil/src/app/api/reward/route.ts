@@ -1,5 +1,10 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
+import { corsPreflight, jsonWithCors } from "@/lib/api-cors";
 import { buildRewardMessage, buildWhatsappUrl } from "@/lib/whatsapp";
+
+export function OPTIONS(request: NextRequest) {
+  return corsPreflight(request);
+}
 
 export async function POST(request: NextRequest) {
   const body = (await request.json().catch(() => ({}))) as {
@@ -14,7 +19,7 @@ export async function POST(request: NextRequest) {
   const subject = body.subject || "uma matéria";
   const message = buildRewardMessage({ reward, missionTitle, subject });
 
-  return NextResponse.json({
+  return jsonWithCors(request, {
     ok: true,
     rewardRequest: {
       missionId: body.missionId || "unknown",

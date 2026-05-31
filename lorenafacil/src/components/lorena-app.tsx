@@ -28,6 +28,7 @@ import {
   type Mission,
   type SubjectId,
 } from "@/lib/lorena-data";
+import { apiUrl } from "@/lib/api-client";
 
 type TabId = "tutor" | "missions" | "stickers";
 type StudyMode = "text" | "photo" | "voice";
@@ -205,7 +206,7 @@ export function LorenaApp() {
   async function requestReward(mission: Mission) {
     const subject = subjects.find((item) => item.id === mission.subjectId)?.title ?? "uma matéria";
 
-    const response = await fetch("/api/reward", {
+    const response = await fetch(apiUrl("/api/reward"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -265,7 +266,7 @@ export function LorenaApp() {
     setIsSending(true);
 
     try {
-      const response = await fetch("/api/tutor", {
+      const response = await fetch(apiUrl("/api/tutor"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

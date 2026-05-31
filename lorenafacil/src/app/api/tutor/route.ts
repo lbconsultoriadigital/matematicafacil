@@ -1,4 +1,5 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
+import { corsPreflight, jsonWithCors } from "@/lib/api-cors";
 import { fallbackAgentReply, getAgentPrompt } from "@/lib/agents";
 import type { SubjectId } from "@/lib/lorena-data";
 
@@ -56,6 +57,10 @@ function buildPrompt({
   return `${base}\n\nPergunta da Lorena: ${message}`;
 }
 
+export function OPTIONS(request: NextRequest) {
+  return corsPreflight(request);
+}
+
 export async function POST(request: NextRequest) {
   const body = (await request.json().catch(() => ({}))) as {
     audio?: unknown;
@@ -71,12 +76,16 @@ export async function POST(request: NextRequest) {
   const audio = sanitizeInlineMedia(body.audio);
 
   if (!message && !image && !audio) {
-    return NextResponse.json({ answer: "Me mande uma pergunta, uma foto ou uma gravação para eu te ajudar." }, { status: 400 });
+    return jsonWithCors(
+      request,
+      { answer: "Me mande uma pergunta, uma foto ou uma gravação para eu te ajudar." },
+      { status: 400 },
+    );
   }
 
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    return NextResponse.json({
+    return jsonWithCors(request, {
       answer: fallbackAgentReply(subjectId, message, mode),
       provider: "fallback",
     });
@@ -130,7 +139,7 @@ export async function POST(request: NextRequest) {
     );
 
     if (!response.ok) {
-      return NextResponse.json({
+      return jsonWithCors(request, {
         answer: fallbackAgentReply(subjectId, message, mode),
         provider: "fallback",
       });
@@ -144,9 +153,9 @@ export async function POST(request: NextRequest) {
         .join("\n")
         .trim() || fallbackAgentReply(subjectId, message, mode);
 
-    return NextResponse.json({ answer, provider: "gemini", model: GEMINI_MODEL });
+    return jsonWithCors(request, { answer, provider: "gemini", model: GEMINI_MODEL });
   } catch {
-    return NextResponse.json({
+    return jsonWithCors(request, {
       answer: fallbackAgentReply(subjectId, message, mode),
       provider: "fallback",
     });

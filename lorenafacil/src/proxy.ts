@@ -20,10 +20,23 @@ function isPublicPath(pathname: string) {
   );
 }
 
+function isCapacitorOrigin(request: NextRequest) {
+  const origin = request.headers.get("origin");
+  return origin === "capacitor://localhost" || origin === "https://localhost";
+}
+
 export async function proxy(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
 
   if (isPublicPath(pathname)) {
+    return NextResponse.next();
+  }
+
+  if (request.method === "OPTIONS" && pathname.startsWith("/api/")) {
+    return NextResponse.next();
+  }
+
+  if ((pathname === "/api/tutor" || pathname === "/api/reward") && isCapacitorOrigin(request)) {
     return NextResponse.next();
   }
 
