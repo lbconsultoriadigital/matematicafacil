@@ -1,16 +1,22 @@
 "use client";
 
 import Image from "next/image";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import {
+  BookOpenCheck,
+  Camera,
   CheckCircle2,
-  ChevronRight,
   Flame,
   Gift,
+  Keyboard,
+  Loader2,
   Lock,
+  Mic,
   Send,
   Sparkles,
   Trophy,
+  Volume2,
+  VolumeX,
 } from "lucide-react";
 import {
   bottomNav,
@@ -24,17 +30,50 @@ import {
 } from "@/lib/lorena-data";
 
 type TabId = "tutor" | "missions" | "stickers";
-type ChatMessage = { id: string; role: "user" | "assistant"; text: string; subjectId: SubjectId };
+type StudyMode = "text" | "photo" | "voice";
+type ChatMessage = {
+  id: string;
+  imagePreview?: string;
+  mode: StudyMode;
+  role: "user" | "assistant";
+  subjectId: SubjectId;
+  text: string;
+};
 type RewardRequest = { id: string; missionId: string; reward: string; createdAt: string };
+type InlineMedia = { mimeType: string; data: string };
+type PreparedImage = InlineMedia & { preview: string };
+type SpeechRecognitionResultItem = { [index: number]: { transcript?: string } };
+type SpeechRecognitionEventLike = Event & { results: ArrayLike<SpeechRecognitionResultItem> };
+type SpeechRecognitionLike = {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  maxAlternatives: number;
+  onend: (() => void) | null;
+  onerror: ((event: Event) => void) | null;
+  onresult: ((event: SpeechRecognitionEventLike) => void) | null;
+  abort: () => void;
+  start: () => void;
+  stop: () => void;
+};
+type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
 
-const STORAGE_KEY = "lorena_facil_state_v1";
+declare global {
+  interface Window {
+    SpeechRecognition?: SpeechRecognitionConstructor;
+    webkitSpeechRecognition?: SpeechRecognitionConstructor;
+  }
+}
+
+const STORAGE_KEY = "lorena_facil_state_v2";
 
 const initialMessages: ChatMessage[] = [
   {
     id: "welcome",
+    mode: "text",
     role: "assistant",
     subjectId: "history",
-    text: "Oi, Lorena! Hoje eu posso te ajudar com História ou Inglês. Escolha uma matéria e me mande uma pergunta.",
+    text: "Oi, Lorena! Escolha Foto, Falar ou Digitar. Eu vou te ajudar em passos pequenos, como uma amiga estudando junto.",
   },
 ];
 
@@ -42,18 +81,31 @@ export function LorenaApp() {
   const [activeTab, setActiveTab] = useState<TabId>("tutor");
   const [selectedSubject, setSelectedSubject] = useState<SubjectId>("history");
   const [input, setInput] = useState("");
-  const [xp, setXp] = useState(120);
+  const [xp, setXp] = useState(0);
   const [streak, setStreak] = useState(student.streak);
-  const [completedMissionIds, setCompletedMissionIds] = useState<string[]>([
-    "historia-linha-do-tempo",
-  ]);
-  const [unlockedStickerIds, setUnlockedStickerIds] = useState<string[]>(["bom-dia", "uau-aprovado"]);
+  const [completedMissionIds, setCompletedMissionIds] = useState<string[]>([]);
+  const [unlockedStickerIds, setUnlockedStickerIds] = useState<string[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [rewardRequests, setRewardRequests] = useState<RewardRequest[]>([]);
-  const [recentReward, setRecentReward] = useState<Mission | null>(missions[0]);
+  const [recentReward, setRecentReward] = useState<Mission | null>(null);
   const [isSending, setIsSending] = useState(false);
+  const [isReadingPhoto, setIsReadingPhoto] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const [isVoiceEnabled, setIsVoiceEnabled] = useState(true);
+  const [voiceHint, setVoiceHint] = useState("Toque em Falar para gravar sua pergunta.");
+  const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+  const [photoName, setPhotoName] = useState("");
   const [floatingXp, setFloatingXp] = useState("");
   const [hydrated, setHydrated] = useState(false);
+  const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
+
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const transcriptRef = useRef("");
+  const recordingTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -61,12 +113,12 @@ export function LorenaApp() {
       if (saved) {
         try {
           const parsed = JSON.parse(saved);
-          setXp(parsed.xp ?? 120);
+          setXp(parsed.xp ?? 0);
           setStreak(parsed.streak ?? student.streak);
-          setCompletedMissionIds(parsed.completedMissionIds ?? ["historia-linha-do-tempo"]);
-          setUnlockedStickerIds(parsed.unlockedStickerIds ?? ["bom-dia", "uau-aprovado"]);
-          setMessages(parsed.messages ?? initialMessages);
-          setRewardRequests(parsed.rewardRequests ?? []);
+          setCompletedMissionIds(Array.isArray(parsed.completedMissionIds) ? parsed.completedMissionIds : []);
+          setUnlockedStickerIds(Array.isArray(parsed.unlockedStickerIds) ? parsed.unlockedStickerIds : []);
+          setMessages(Array.isArray(parsed.messages) ? parsed.messages : initialMessages);
+          setRewardRequests(Array.isArray(parsed.rewardRequests) ? parsed.rewardRequests : []);
         } catch {
           window.localStorage.removeItem(STORAGE_KEY);
         }
@@ -92,32 +144,49 @@ export function LorenaApp() {
     );
   }, [completedMissionIds, hydrated, messages, rewardRequests, streak, unlockedStickerIds, xp]);
 
+  useEffect(() => {
+    if (!("speechSynthesis" in window)) return;
+
+    const loadVoices = () => setAvailableVoices(window.speechSynthesis.getVoices());
+    loadVoices();
+    window.speechSynthesis.onvoiceschanged = loadVoices;
+
+    return () => {
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.onvoiceschanged = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      stopRecordingTracks();
+      if (recordingTimerRef.current) {
+        window.clearTimeout(recordingTimerRef.current);
+      }
+      recognitionRef.current?.abort();
+    };
+  }, []);
+
   const selectedSubjectData = subjects.find((subject) => subject.id === selectedSubject) ?? subjects[0];
-
-  const progressBySubject = useMemo(() => {
-    return subjects.map((subject) => {
-      const subjectMissions = missions.filter((mission) => mission.subjectId === subject.id);
-      const done = subjectMissions.filter((mission) => completedMissionIds.includes(mission.id)).length;
-      return { ...subject, total: subjectMissions.length, done };
-    });
-  }, [completedMissionIds]);
-
-  const nextLevelProgress = Math.min(100, Math.round((xp / 220) * 100));
+  const latestAssistant = [...messages].reverse().find((message) => message.role === "assistant");
   const completedCount = completedMissionIds.length;
   const totalMissions = missions.length;
+  const nextLevelProgress = Math.min(100, Math.round((xp / 220) * 100));
+  const nextMissions = missions.filter((mission) => !completedMissionIds.includes(mission.id));
+  const latestSticker = recentReward ? stickers.find((sticker) => sticker.id === recentReward.stickerId) : null;
 
   function completeMission(mission: Mission) {
     if (completedMissionIds.includes(mission.id)) return;
 
     setCompletedMissionIds((current) => [...current, mission.id]);
     setXp((current) => current + mission.xp);
-    setStreak((current) => Math.max(current, student.streak));
+    setStreak((current) => current + 1);
     setRecentReward(mission);
-    setFloatingXp(`+${mission.xp} XP`);
-
-    if (!unlockedStickerIds.includes(mission.stickerId)) {
-      setUnlockedStickerIds((current) => [...current, mission.stickerId]);
-    }
+    setFloatingXp(`+${mission.xp} XP e 1 figurinha`);
+    setUnlockedStickerIds((current) => {
+      if (current.includes(mission.stickerId)) return current;
+      return [...current, mission.stickerId];
+    });
 
     window.setTimeout(() => setFloatingXp(""), 1800);
   }
@@ -150,50 +219,279 @@ export function LorenaApp() {
     }
   }
 
-  async function sendMessage(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const text = input.trim();
-    if (!text || isSending) return;
+  async function sendTutorRequest({
+    audio,
+    image,
+    message,
+    mode,
+    userText,
+  }: {
+    audio?: InlineMedia;
+    image?: PreparedImage;
+    message: string;
+    mode: StudyMode;
+    userText?: string;
+  }) {
+    const trimmed = message.trim();
+    if ((!trimmed && !image && !audio) || isSending) return;
 
     const userMessage: ChatMessage = {
       id: `user-${Date.now()}`,
+      imagePreview: image?.preview,
+      mode,
       role: "user",
-      text,
+      text:
+        userText ||
+        (mode === "photo"
+          ? "Enviei uma foto da atividade."
+          : mode === "voice"
+            ? "Enviei uma pergunta de voz."
+            : trimmed),
       subjectId: selectedSubject,
     };
+
     setMessages((current) => [...current, userMessage]);
-    setInput("");
     setIsSending(true);
 
     try {
       const response = await fetch("/api/tutor", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ subjectId: selectedSubject, message: text }),
+        body: JSON.stringify({
+          audio: audio ? { data: audio.data, mimeType: audio.mimeType } : undefined,
+          image: image ? { data: image.data, mimeType: image.mimeType } : undefined,
+          message: trimmed,
+          mode,
+          subjectId: selectedSubject,
+        }),
       });
+
       const data = (await response.json()) as { answer?: string };
+      const answer = data.answer || "Vamos tentar de novo com uma pergunta menor?";
       setMessages((current) => [
         ...current,
         {
           id: `assistant-${Date.now()}`,
+          mode,
           role: "assistant",
-          text: data.answer || "Vamos tentar de novo com uma pergunta menor?",
+          text: answer,
           subjectId: selectedSubject,
         },
       ]);
+      speakTutor(answer);
+    } catch {
+      const answer = "Não consegui responder agora. Sua pergunta ficou salva aqui para tentarmos de novo.";
+      setMessages((current) => [
+        ...current,
+        {
+          id: `assistant-${Date.now()}`,
+          mode,
+          role: "assistant",
+          text: answer,
+          subjectId: selectedSubject,
+        },
+      ]);
+      speakTutor(answer);
+    } finally {
+      setIsSending(false);
+    }
+  }
+
+  async function sendMessage(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const text = input.trim();
+    if (!text) return;
+    setInput("");
+    await sendTutorRequest({ message: text, mode: "text" });
+  }
+
+  async function handlePhotoChange(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file || isSending) return;
+
+    setIsReadingPhoto(true);
+    setPhotoName(file.name);
+
+    try {
+      const image = await prepareImage(file);
+      setPhotoPreview(image.preview);
+      await sendTutorRequest({
+        image,
+        message: "Leia a foto da atividade e transforme em um plano de estudo simples.",
+        mode: "photo",
+        userText: "Enviei uma foto da minha atividade.",
+      });
     } catch {
       setMessages((current) => [
         ...current,
         {
-          id: `assistant-${Date.now()}`,
+          id: `photo-error-${Date.now()}`,
+          mode: "photo",
           role: "assistant",
-          text: "Não consegui responder agora, mas sua pergunta ficou salva para tentarmos de novo.",
           subjectId: selectedSubject,
+          text: "Não consegui ler essa foto. Tente tirar outra foto com boa luz e a folha bem retinha.",
         },
       ]);
     } finally {
-      setIsSending(false);
+      setIsReadingPhoto(false);
     }
+  }
+
+  async function toggleVoiceRecording() {
+    if (isListening) {
+      stopVoiceRecording();
+      return;
+    }
+
+    if (isSending) return;
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setVoiceHint("Este navegador não liberou gravação. Use Digitar por enquanto.");
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      streamRef.current = stream;
+      recorderRef.current = recorder;
+      audioChunksRef.current = [];
+      transcriptRef.current = "";
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) audioChunksRef.current.push(event.data);
+      };
+      recorder.onstop = () => {
+        void finishVoiceRecording();
+      };
+
+      startSpeechRecognition();
+      recorder.start();
+      setIsListening(true);
+      setVoiceHint("Estou ouvindo. Toque em Falar de novo para enviar.");
+      recordingTimerRef.current = window.setTimeout(() => stopVoiceRecording(), 10000);
+    } catch {
+      setVoiceHint("Para falar comigo, libere o microfone do celular.");
+    }
+  }
+
+  function startSpeechRecognition() {
+    const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!Recognition) {
+      setVoiceHint("Vou gravar sua voz e tentar entender pelo áudio.");
+      return;
+    }
+
+    try {
+      const recognition = new Recognition();
+      recognition.lang = "pt-BR";
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.maxAlternatives = 1;
+      recognition.onresult = (event) => {
+        const transcript = Array.from(event.results)
+          .map((result) => result[0]?.transcript ?? "")
+          .join(" ")
+          .trim();
+        transcriptRef.current = transcript;
+        if (transcript) setInput(transcript);
+      };
+      recognition.onerror = () => {
+        setVoiceHint("Continue falando. Se não virar texto, eu tento pelo áudio.");
+      };
+      recognition.onend = null;
+      recognitionRef.current = recognition;
+      recognition.start();
+    } catch {
+      setVoiceHint("Vou gravar sua voz e tentar entender pelo áudio.");
+    }
+  }
+
+  function stopVoiceRecording() {
+    if (recordingTimerRef.current) {
+      window.clearTimeout(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+
+    try {
+      recognitionRef.current?.stop();
+    } catch {
+      recognitionRef.current?.abort();
+    }
+
+    const recorder = recorderRef.current;
+    if (recorder && recorder.state !== "inactive") {
+      recorder.stop();
+    } else {
+      void finishVoiceRecording();
+    }
+
+    setIsListening(false);
+  }
+
+  async function finishVoiceRecording() {
+    stopRecordingTracks();
+    const transcript = transcriptRef.current.trim() || input.trim();
+    const chunks = audioChunksRef.current;
+    audioChunksRef.current = [];
+    recorderRef.current = null;
+
+    if (transcript) {
+      setInput("");
+      setVoiceHint("Pergunta enviada. Toque para gravar outra.");
+      await sendTutorRequest({
+        message: transcript,
+        mode: "voice",
+        userText: `Eu falei: ${transcript}`,
+      });
+      return;
+    }
+
+    if (chunks.length > 0) {
+      const mimeType = chunks[0]?.type || "audio/webm";
+      const blob = new Blob(chunks, { type: mimeType });
+      const dataUrl = await blobToDataUrl(blob);
+      const data = dataUrl.split(",")[1];
+      if (data) {
+        setVoiceHint("Áudio enviado. Toque para gravar outra.");
+        await sendTutorRequest({
+          audio: { data, mimeType },
+          message: "Escute minha pergunta de voz e me ajude a estudar.",
+          mode: "voice",
+          userText: "Enviei uma pergunta de voz.",
+        });
+        return;
+      }
+    }
+
+    setVoiceHint("Não ouvi nada. Tente falar pertinho do celular.");
+  }
+
+  function stopRecordingTracks() {
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+  }
+
+  function toggleVoice() {
+    setIsVoiceEnabled((enabled) => {
+      if (enabled) window.speechSynthesis?.cancel();
+      return !enabled;
+    });
+  }
+
+  function speakTutor(text?: string) {
+    if (!isVoiceEnabled || !text || !("speechSynthesis" in window)) return;
+
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(cleanForSpeech(text));
+    const voices = availableVoices.length ? availableVoices : window.speechSynthesis.getVoices();
+    const voice = pickVoice(voices);
+    if (voice) utterance.voice = voice;
+    utterance.lang = "pt-BR";
+    utterance.rate = 1.08;
+    utterance.pitch = 0.92;
+    window.speechSynthesis.speak(utterance);
   }
 
   return (
@@ -204,7 +502,7 @@ export function LorenaApp() {
         </div>
       ) : null}
 
-      <div className="mx-auto min-h-screen w-full max-w-[430px] bg-white px-5 pb-8 pt-3 shadow-2xl shadow-pink-950/5 md:my-6 md:rounded-[38px]">
+      <div className="mx-auto min-h-screen w-full max-w-[430px] bg-white px-4 pb-4 pt-2 shadow-2xl shadow-pink-950/5 md:my-6 md:rounded-[38px]">
         <PhoneStatusBar />
         <Header streak={streak} />
 
@@ -212,21 +510,35 @@ export function LorenaApp() {
           <TutorHome
             completedCount={completedCount}
             input={input}
+            isListening={isListening}
+            isReadingPhoto={isReadingPhoto}
             isSending={isSending}
-            messages={messages}
+            isVoiceEnabled={isVoiceEnabled}
+            latestAssistant={latestAssistant}
+            latestSticker={latestSticker}
             nextLevelProgress={nextLevelProgress}
+            nextMissions={nextMissions}
+            onCompleteMission={completeMission}
             onInputChange={setInput}
+            onPhotoTap={() => fileInputRef.current?.click()}
             onRequestReward={requestReward}
             onSendMessage={sendMessage}
             onShortcut={(id) => {
               if (id === "missions" || id === "stickers") setActiveTab(id);
             }}
+            onSpeakLatest={() => speakTutor(latestAssistant?.text)}
+            onToggleVoice={toggleVoice}
+            onVoiceTap={toggleVoiceRecording}
+            photoName={photoName}
+            photoPreview={photoPreview}
             recentReward={recentReward}
-            progressBySubject={progressBySubject}
             selectedSubject={selectedSubject}
             selectedSubjectData={selectedSubjectData}
             setSelectedSubject={setSelectedSubject}
             totalMissions={totalMissions}
+            unlockedStickerCount={unlockedStickerIds.length}
+            voiceHint={voiceHint}
+            xp={xp}
           />
         ) : null}
 
@@ -235,14 +547,22 @@ export function LorenaApp() {
             completedMissionIds={completedMissionIds}
             onCompleteMission={completeMission}
             onRequestReward={requestReward}
+            unlockedStickerIds={unlockedStickerIds}
           />
         ) : null}
 
-        {activeTab === "stickers" ? (
-          <StickerPanel unlockedStickerIds={unlockedStickerIds} />
-        ) : null}
+        {activeTab === "stickers" ? <StickerPanel unlockedStickerIds={unlockedStickerIds} /> : null}
 
         <BottomNavigation activeTab={activeTab} setActiveTab={setActiveTab} />
+
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          capture="environment"
+          className="hidden"
+          onChange={handlePhotoChange}
+        />
       </div>
     </main>
   );
@@ -273,39 +593,39 @@ function PhoneStatusBar() {
 
 function Header({ streak }: { streak: number }) {
   return (
-    <header className="mt-8 flex items-center justify-between">
+    <header className="mt-4 flex items-center justify-between">
       <div className="flex items-center gap-3">
-        <div className="relative flex h-14 w-14 items-center justify-center rounded-[18px] bg-gradient-to-br from-pink-500 to-fuchsia-500 text-white shadow-lg shadow-pink-500/20">
-          <span className="absolute left-4 top-3 h-8 w-1.5 rounded-full bg-white/80" />
-          <span className="absolute right-4 top-3 h-8 w-1.5 rounded-full bg-white/80" />
+        <div className="relative flex h-[52px] w-[52px] items-center justify-center rounded-[17px] bg-gradient-to-br from-pink-500 to-fuchsia-500 text-white shadow-lg shadow-pink-500/20">
+          <span className="absolute left-3.5 top-3 h-7 w-1.5 rounded-full bg-white/80" />
+          <span className="absolute right-3.5 top-3 h-7 w-1.5 rounded-full bg-white/80" />
           <span className="absolute bottom-3 h-1.5 w-8 rounded-full bg-yellow-300" />
           <Sparkles className="relative h-6 w-6" />
         </div>
-        <h1 className="text-[30px] font-black leading-[0.92] tracking-tight">
+        <h1 className="text-[27px] font-black leading-[0.92]">
           Lorena
           <br />
           <span className="text-pink-500">Fácil</span>
         </h1>
       </div>
 
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-3">
         <div className="text-center leading-tight">
           <div className="flex items-center justify-center gap-1">
-            <Flame className="h-6 w-6 fill-orange-500/20 text-orange-500" />
-            <span className="text-2xl font-black">{streak}</span>
+            <Flame className="h-5 w-5 fill-orange-500/20 text-orange-500" />
+            <span className="text-xl font-black">{streak}</span>
           </div>
-          <span className="text-sm font-medium text-pink-500">sequência!</span>
+          <span className="text-xs font-bold text-pink-500">sequência</span>
         </div>
-        <div className="relative h-[58px] w-[58px] overflow-hidden rounded-full border-[4px] border-pink-400 bg-pink-50">
+        <div className="relative h-[54px] w-[54px] overflow-hidden rounded-full border-[4px] border-pink-400 bg-pink-50">
           <Image
             src={student.avatar}
             alt="Lorena"
             fill
             priority
-            sizes="58px"
+            sizes="54px"
             className="object-cover object-top"
           />
-          <span className="absolute bottom-1 right-1 h-3.5 w-3.5 rounded-full border-2 border-white bg-emerald-500" />
+          <span className="absolute bottom-1 right-1 h-3 w-3 rounded-full border-2 border-white bg-emerald-500" />
         </div>
       </div>
     </header>
@@ -315,193 +635,221 @@ function Header({ streak }: { streak: number }) {
 function TutorHome({
   completedCount,
   input,
+  isListening,
+  isReadingPhoto,
   isSending,
-  messages,
+  isVoiceEnabled,
+  latestAssistant,
+  latestSticker,
   nextLevelProgress,
+  nextMissions,
+  onCompleteMission,
   onInputChange,
+  onPhotoTap,
   onRequestReward,
   onSendMessage,
   onShortcut,
-  progressBySubject,
+  onSpeakLatest,
+  onToggleVoice,
+  onVoiceTap,
+  photoName,
+  photoPreview,
   recentReward,
   selectedSubject,
   selectedSubjectData,
   setSelectedSubject,
   totalMissions,
+  unlockedStickerCount,
+  voiceHint,
+  xp,
 }: {
   completedCount: number;
   input: string;
+  isListening: boolean;
+  isReadingPhoto: boolean;
   isSending: boolean;
-  messages: ChatMessage[];
+  isVoiceEnabled: boolean;
+  latestAssistant?: ChatMessage;
+  latestSticker?: (typeof stickers)[number] | null;
   nextLevelProgress: number;
+  nextMissions: Mission[];
+  onCompleteMission: (mission: Mission) => void;
   onInputChange: (value: string) => void;
+  onPhotoTap: () => void;
   onRequestReward: (mission: Mission) => void;
   onSendMessage: (event: FormEvent<HTMLFormElement>) => void;
   onShortcut: (id: string) => void;
-  progressBySubject: Array<(typeof subjects)[number] & { done: number; total: number }>;
+  onSpeakLatest: () => void;
+  onToggleVoice: () => void;
+  onVoiceTap: () => void;
+  photoName: string;
+  photoPreview: string | null;
   recentReward: Mission | null;
   selectedSubject: SubjectId;
   selectedSubjectData: (typeof subjects)[number];
   setSelectedSubject: (subjectId: SubjectId) => void;
   totalMissions: number;
+  unlockedStickerCount: number;
+  voiceHint: string;
+  xp: number;
 }) {
-  const latestAssistant = [...messages].reverse().find((message) => message.role === "assistant");
+  const missionPreview = nextMissions.slice(0, 2);
 
   return (
     <>
-      <section className="mt-7 overflow-hidden rounded-[28px] border border-pink-100 bg-white p-4 shadow-lg shadow-pink-950/5">
-        <div className="flex items-start gap-3">
-          <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-pink-50 text-pink-500">
-            <TargetIcon />
-          </span>
+      <section className="mt-4 overflow-hidden rounded-[30px] bg-gradient-to-br from-pink-500 via-fuchsia-500 to-pink-700 p-4 text-white shadow-xl shadow-pink-600/20">
+        <div className="flex items-center gap-3">
+          <div className="relative h-[86px] w-[86px] shrink-0 overflow-hidden rounded-full border-[5px] border-white/85 bg-pink-100 shadow-xl shadow-pink-950/20">
+            <Image src={student.avatar} alt="Tutora Lorena" fill priority sizes="86px" className="object-cover object-top" />
+          </div>
           <div className="min-w-0 flex-1">
-            <p className="text-lg font-black">Desafio de hoje</p>
-            <p className="text-[17px] leading-snug text-slate-500">
-              Complete as atividades e ganhe XP!
-            </p>
+            <p className="text-xs font-bold text-pink-50">Tutora de História e Inglês</p>
+            <h2 className="text-[30px] font-black leading-tight">Oi, Lorena!</h2>
+            <p className="text-[16px] font-medium leading-snug text-pink-50">Como quer estudar agora?</p>
           </div>
-        </div>
-
-        <div className="mt-4 grid gap-3">
-          {progressBySubject.map((subject) => {
-            const Icon = subject.icon;
-            const width = `${Math.max(12, Math.round((subject.done / subject.total) * 100))}%`;
-            return (
-              <div
-                key={subject.id}
-                className="grid grid-cols-[52px_1fr_58px] items-center gap-3 rounded-[22px] border border-pink-100 bg-white px-3 py-3"
-              >
-                <span className="flex h-12 w-12 items-center justify-center rounded-full" style={{ background: subject.soft, color: subject.accent }}>
-                  <Icon className="h-6 w-6" />
-                </span>
-                <div className="min-w-0">
-                  <p className="text-xl font-black">{subject.title}</p>
-                  <p className="text-sm font-bold" style={{ color: subject.accent }}>
-                    {subject.done} de {subject.total} atividades
-                  </p>
-                  <div className="mt-2 h-2 rounded-full bg-slate-100">
-                    <div className="h-full rounded-full" style={{ width, background: subject.accent }} />
-                  </div>
-                </div>
-                <span className="flex h-12 w-12 items-center justify-center rounded-full border-2 text-lg font-black" style={{ borderColor: subject.accent }}>
-                  {subject.done}/{subject.total}
-                </span>
-              </div>
-            );
-          })}
-        </div>
-
-        <div className="mt-4 rounded-[24px] bg-gradient-to-br from-pink-500 to-fuchsia-600 p-4 text-white">
-          <div className="flex items-center justify-between">
-            <div>
-              <span className="text-4xl font-black">+40</span>
-              <span className="ml-2 rounded-full bg-[#17183f] px-2 py-1 text-xs font-black text-yellow-300">
-                XP
-              </span>
-              <p className="mt-1 text-lg leading-tight text-pink-50">para o próximo nível</p>
-            </div>
-            <div className="text-right text-sm font-bold text-pink-50">
-              {completedCount}/{totalMissions}
-              <br />
-              missões
-            </div>
-          </div>
-          <div className="mt-4 h-2 rounded-full bg-white/25">
-            <div className="h-full rounded-full bg-yellow-300" style={{ width: `${nextLevelProgress}%` }} />
-          </div>
-        </div>
-      </section>
-
-      <section className="mt-5 overflow-hidden rounded-[30px] border-2 border-pink-500 bg-white shadow-xl shadow-pink-600/10">
-        <div className="relative h-[318px] overflow-hidden bg-gradient-to-br from-pink-500 via-fuchsia-500 to-pink-700 px-5 pt-8 text-white">
-          <span className="absolute right-8 top-8 text-5xl text-white/15">📖</span>
-          <span className="absolute right-12 top-32 text-4xl text-white/15">Hi!</span>
-          <span className="absolute left-7 bottom-20 h-20 w-20 rounded-full border-2 border-dashed border-white/15" />
-          <div className="absolute bottom-20 left-5 h-[116px] w-[116px] overflow-hidden rounded-full border-[5px] border-white/80 bg-pink-100 shadow-2xl shadow-pink-950/20 float-soft">
-            <Image
-              src={student.avatar}
-              alt="Tutora Lorena"
-              fill
-              priority
-              sizes="116px"
-              className="object-cover object-top"
-            />
-          </div>
-
-          <div className="relative ml-[124px] max-w-[190px]">
-            <p className="flex items-start gap-2 text-[12px] font-semibold leading-tight text-pink-50">
-              <span className="mt-0.5 h-3 w-3 shrink-0 rounded-full bg-lime-400" />
-              <span>Seu tutor de História e Inglês</span>
-            </p>
-            <h2 className="mt-5 text-[31px] font-black leading-[1.06] tracking-tight">
-              Oi, Lorena! <span aria-hidden>👋</span>
-            </h2>
-            <p className="mt-3 text-[19px] leading-tight text-pink-50">
-              Em que posso te ajudar hoje?
-            </p>
-          </div>
-        </div>
-
-        <div className="relative bg-white px-5 pb-6 pt-16">
-          <form
-            onSubmit={onSendMessage}
-            className="absolute -top-10 left-6 right-6 flex h-20 items-center gap-3 rounded-full bg-white p-3 shadow-xl shadow-pink-950/10"
+          <button
+            type="button"
+            onClick={onToggleVoice}
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white/18 text-white backdrop-blur transition active:scale-95"
+            title={isVoiceEnabled ? "Desligar voz" : "Ligar voz"}
           >
-            <input
-              type="text"
-              value={input}
-              onChange={(event) => onInputChange(event.target.value)}
-              placeholder="Pergunte sobre História ou Inglês..."
-              className="min-w-0 flex-1 bg-transparent px-2 text-[13px] font-medium text-[#17183f] outline-none placeholder:text-slate-400"
-            />
-            <button
-              type="submit"
-              disabled={isSending}
-              className="flex h-[52px] w-[52px] shrink-0 items-center justify-center rounded-full bg-pink-500 text-white shadow-lg shadow-pink-500/25 transition active:scale-95 disabled:opacity-60"
-              title="Enviar pergunta"
-            >
-              <Send className="h-6 w-6 fill-current" />
-            </button>
-          </form>
+            {isVoiceEnabled ? <Volume2 className="h-5 w-5" /> : <VolumeX className="h-5 w-5" />}
+          </button>
+        </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            {subjects.map((subject) => {
-              const Icon = subject.icon;
-              const selected = selectedSubject === subject.id;
-              return (
-                <button
-                  key={subject.id}
-                  type="button"
-                  onClick={() => setSelectedSubject(subject.id)}
-                  className={`flex min-h-24 items-center gap-3 rounded-[26px] border px-4 text-left shadow-sm transition active:scale-[0.98] ${
-                    selected ? "border-pink-300 bg-pink-50" : "border-slate-100 bg-white"
-                  }`}
-                >
-                  <span className="flex h-14 w-14 items-center justify-center rounded-full" style={{ background: subject.soft, color: subject.accent }}>
-                    <Icon className="h-7 w-7" />
-                  </span>
-                  <span className="min-w-0">
-                    <span className="block text-xl font-black">{subject.title}</span>
-                    <span className="block text-sm font-bold" style={{ color: subject.accent }}>
-                      Perguntar agora
-                    </span>
-                  </span>
-                  <ChevronRight className="ml-auto h-5 w-5 text-slate-400" />
-                </button>
-              );
-            })}
-          </div>
-
-          {latestAssistant ? (
-            <div className="mt-4 rounded-[22px] bg-slate-50 p-4 text-sm leading-relaxed text-slate-600">
-              <span className="font-black text-[#17183f]">{selectedSubjectData.agentName}: </span>
-              {latestAssistant.text}
-            </div>
-          ) : null}
+        <div className="mt-4 grid grid-cols-3 gap-2">
+          <HeroAction
+            active={isReadingPhoto}
+            icon={Camera}
+            label="Foto"
+            sublabel="Ler tarefa"
+            onClick={onPhotoTap}
+          />
+          <HeroAction
+            active={isListening}
+            icon={Mic}
+            label={isListening ? "Parar" : "Falar"}
+            sublabel={isListening ? "Enviar voz" : "Gravar"}
+            onClick={onVoiceTap}
+          />
+          <HeroAction
+            active={false}
+            icon={Keyboard}
+            label="Digitar"
+            sublabel="Pergunta"
+            onClick={() => document.getElementById("lorena-question")?.focus()}
+          />
         </div>
       </section>
 
-      <div className="mt-5 grid grid-cols-4 gap-2">
+      <section className="mt-3 grid grid-cols-2 gap-2">
+        {subjects.map((subject) => {
+          const Icon = subject.icon;
+          const selected = selectedSubject === subject.id;
+          return (
+            <button
+              key={subject.id}
+              type="button"
+              onClick={() => setSelectedSubject(subject.id)}
+              className={`flex h-14 items-center gap-2 rounded-[18px] border px-3 text-left transition active:scale-[0.98] ${
+                selected ? "border-pink-300 bg-pink-50" : "border-slate-100 bg-white shadow-sm"
+              }`}
+            >
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full" style={{ background: subject.soft, color: subject.accent }}>
+                <Icon className="h-5 w-5" />
+              </span>
+              <span className="min-w-0 text-lg font-black leading-none">{subject.title}</span>
+            </button>
+          );
+        })}
+      </section>
+
+      <form onSubmit={onSendMessage} className="mt-3 flex h-[60px] items-center gap-2 rounded-full border border-pink-100 bg-white p-2 shadow-lg shadow-pink-950/10">
+        <input
+          id="lorena-question"
+          type="text"
+          value={input}
+          onChange={(event) => onInputChange(event.target.value)}
+          placeholder="Digite sua dúvida aqui..."
+          className="min-w-0 flex-1 bg-transparent px-3 text-[15px] font-semibold text-[#17183f] outline-none placeholder:text-slate-400"
+        />
+        <button
+          type="submit"
+          disabled={isSending}
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-pink-500 text-white shadow-lg shadow-pink-500/25 transition active:scale-95 disabled:opacity-60"
+          title="Enviar pergunta"
+        >
+          {isSending ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5 fill-current" />}
+        </button>
+      </form>
+
+      <div className="mt-3 rounded-[20px] bg-slate-50 px-4 py-3 text-sm font-bold leading-snug text-slate-500">
+        {isListening ? "Gravando sua voz. Fale pertinho do celular." : isReadingPhoto ? "Estou lendo a foto da atividade." : voiceHint}
+      </div>
+
+      {photoPreview ? (
+        <div className="mt-3 flex items-center gap-3 rounded-[22px] border border-pink-100 bg-white p-3 shadow-sm">
+          <Image src={photoPreview} alt="Foto enviada" width={74} height={74} className="h-[74px] w-[74px] rounded-2xl object-cover" />
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-black text-pink-500">Foto enviada</p>
+            <p className="truncate text-sm font-semibold text-slate-500">{photoName || "atividade da Lorena"}</p>
+          </div>
+          <BookOpenCheck className="h-7 w-7 text-pink-500" />
+        </div>
+      ) : null}
+
+      {latestAssistant ? (
+        <section className="mt-3 rounded-[24px] bg-[#f5f7ff] p-4 text-[15px] leading-relaxed text-slate-600 shadow-sm">
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <p className="font-black text-[#17183f]">{selectedSubjectData.agentName}</p>
+            <button
+              type="button"
+              onClick={onSpeakLatest}
+              className="flex h-9 w-9 items-center justify-center rounded-full bg-white text-pink-500 shadow-sm transition active:scale-95"
+              title="Ouvir resposta"
+            >
+              <Volume2 className="h-4 w-4" />
+            </button>
+          </div>
+          <p className="whitespace-pre-line">{latestAssistant.text}</p>
+        </section>
+      ) : null}
+
+      <section className="mt-4 grid grid-cols-3 gap-2">
+        <MiniStat label="XP" value={xp.toString()} />
+        <MiniStat label="Figurinhas" value={`${unlockedStickerCount}/${stickers.length}`} />
+        <MiniStat label="Tarefas" value={`${completedCount}/${totalMissions}`} />
+      </section>
+
+      <section className="mt-4 overflow-hidden rounded-[26px] border border-pink-100 bg-white p-4 shadow-lg shadow-pink-950/5">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-black text-pink-500">Começo do jogo</p>
+            <h3 className="text-xl font-black">Tudo zerado para começar</h3>
+          </div>
+          <div className="h-2 w-20 rounded-full bg-slate-100">
+            <div className="h-full rounded-full bg-pink-500" style={{ width: `${nextLevelProgress}%` }} />
+          </div>
+        </div>
+
+        <div className="mt-3 grid gap-3">
+          {missionPreview.map((mission) => (
+            <CompactMission
+              key={mission.id}
+              mission={mission}
+              onComplete={() => onCompleteMission(mission)}
+            />
+          ))}
+        </div>
+
+        {missionPreview.length === 0 ? (
+          <div className="mt-3 rounded-[20px] bg-emerald-50 p-4 text-sm font-bold text-emerald-700">
+            Todas as missões foram concluídas. A coleção ficou completa.
+          </div>
+        ) : null}
+      </section>
+
+      <div className="mt-4 grid grid-cols-4 gap-2">
         {shortcutTiles.map((tile) => {
           const Icon = tile.icon;
           return (
@@ -509,19 +857,94 @@ function TutorHome({
               key={tile.id}
               type="button"
               onClick={() => onShortcut(tile.id)}
-              className={`flex aspect-square min-w-0 flex-col items-center justify-center gap-1.5 rounded-[20px] border bg-gradient-to-br ${tile.tint} ${tile.border} px-1 text-center shadow-sm transition active:scale-95`}
+              className={`flex aspect-square min-w-0 flex-col items-center justify-center gap-1.5 rounded-[18px] border bg-gradient-to-br ${tile.tint} ${tile.border} px-1 text-center shadow-sm transition active:scale-95`}
             >
               <Icon className="h-7 w-7 text-pink-500" />
-              <span className="text-[11px] font-black leading-tight">{tile.title}</span>
+              <span className="text-[10px] font-black leading-tight">{tile.title}</span>
             </button>
           );
         })}
       </div>
 
-      {recentReward ? (
-        <RewardCard mission={recentReward} onRequestReward={() => onRequestReward(recentReward)} />
+      {latestSticker ? (
+        <section className="mt-4 rounded-[26px] border border-yellow-200 bg-gradient-to-r from-yellow-50 to-white p-4 shadow-lg shadow-yellow-900/5">
+          <div className="flex items-center gap-3">
+            <Image src={latestSticker.src} alt={latestSticker.title} width={64} height={64} className="h-16 w-16 object-contain" />
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-black text-yellow-700">Figurinha liberada</p>
+              <h3 className="text-xl font-black">{latestSticker.title}</h3>
+            </div>
+          </div>
+        </section>
       ) : null}
+
+      {recentReward ? <RewardCard mission={recentReward} onRequestReward={() => onRequestReward(recentReward)} /> : null}
     </>
+  );
+}
+
+function HeroAction({
+  active,
+  icon: Icon,
+  label,
+  onClick,
+  sublabel,
+}: {
+  active: boolean;
+  icon: typeof Camera;
+  label: string;
+  onClick: () => void;
+  sublabel: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`flex min-h-[86px] flex-col items-center justify-center rounded-[22px] px-2 text-center font-black transition active:scale-95 ${
+        active ? "bg-yellow-300 text-[#17183f]" : "bg-white text-[#17183f] shadow-xl shadow-pink-950/10"
+      }`}
+    >
+      <Icon className="h-7 w-7 text-pink-500" />
+      <span className="mt-1 text-[17px] leading-tight">{label}</span>
+      <span className="mt-0.5 text-[11px] font-extrabold leading-tight text-slate-500">{sublabel}</span>
+    </button>
+  );
+}
+
+function MiniStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-[20px] border border-pink-100 bg-white px-3 py-3 text-center shadow-sm">
+      <p className="text-[21px] font-black leading-none text-[#17183f]">{value}</p>
+      <p className="mt-1 text-[11px] font-black text-pink-500">{label}</p>
+    </div>
+  );
+}
+
+function CompactMission({ mission, onComplete }: { mission: Mission; onComplete: () => void }) {
+  const subject = subjects.find((item) => item.id === mission.subjectId) ?? subjects[0];
+  const sticker = stickers.find((item) => item.id === mission.stickerId);
+  const Icon = subject.icon;
+
+  return (
+    <article className="grid grid-cols-[44px_1fr_46px] items-center gap-3 rounded-[20px] bg-slate-50 p-3">
+      <span className="flex h-11 w-11 items-center justify-center rounded-full" style={{ background: subject.soft, color: subject.accent }}>
+        <Icon className="h-5 w-5" />
+      </span>
+      <div className="min-w-0">
+        <p className="truncate text-sm font-black">{mission.title}</p>
+        <p className="truncate text-xs font-semibold text-slate-500">
+          Libera: {sticker?.title ?? "figurinha"}
+        </p>
+      </div>
+      <button
+        type="button"
+        onClick={onComplete}
+        className="flex h-11 w-11 items-center justify-center rounded-full bg-pink-500 text-white shadow-lg shadow-pink-500/20 transition active:scale-95"
+        title="Completar missão"
+      >
+        <CheckCircle2 className="h-5 w-5" />
+      </button>
+    </article>
   );
 }
 
@@ -529,31 +952,39 @@ function MissionsPanel({
   completedMissionIds,
   onCompleteMission,
   onRequestReward,
+  unlockedStickerIds,
 }: {
   completedMissionIds: string[];
   onCompleteMission: (mission: Mission) => void;
   onRequestReward: (mission: Mission) => void;
+  unlockedStickerIds: string[];
 }) {
   return (
-    <section className="mt-7">
+    <section className="mt-6">
       <div className="flex items-end justify-between">
         <div>
           <p className="text-sm font-black uppercase tracking-[0.18em] text-pink-500">Missões</p>
-          <h2 className="text-3xl font-black">Hoje a Lorena brilha</h2>
+          <h2 className="text-3xl font-black">Começar do zero</h2>
         </div>
         <Trophy className="h-9 w-9 text-yellow-500" />
       </div>
 
-      <div className="mt-5 grid gap-4">
+      <div className="mt-3 rounded-[22px] bg-pink-50 p-4 text-sm font-bold text-pink-700">
+        Cada tarefa concluída libera exatamente uma figurinha. Progresso: {completedMissionIds.length}/{missions.length}.
+      </div>
+
+      <div className="mt-4 grid gap-4">
         {missions.map((mission) => {
           const done = completedMissionIds.includes(mission.id);
           const subject = subjects.find((item) => item.id === mission.subjectId) ?? subjects[0];
+          const sticker = stickers.find((item) => item.id === mission.stickerId);
           const Icon = subject.icon;
+          const unlocked = unlockedStickerIds.includes(mission.stickerId);
 
           return (
             <article
               key={mission.id}
-              className="rounded-[28px] border border-pink-100 bg-white p-4 shadow-lg shadow-pink-950/5"
+              className="rounded-[26px] border border-pink-100 bg-white p-4 shadow-lg shadow-pink-950/5"
             >
               <div className="flex items-start gap-3">
                 <span className="flex h-14 w-14 items-center justify-center rounded-2xl" style={{ background: subject.soft, color: subject.accent }}>
@@ -569,6 +1000,22 @@ function MissionsPanel({
                 <span className="rounded-full bg-yellow-100 px-3 py-1 text-sm font-black text-yellow-700">
                   +{mission.xp}
                 </span>
+              </div>
+
+              <div className="mt-4 flex items-center gap-3 rounded-[20px] bg-slate-50 p-3">
+                {sticker ? (
+                  <Image
+                    src={sticker.src}
+                    alt={sticker.title}
+                    width={58}
+                    height={58}
+                    className={`h-[58px] w-[58px] object-contain ${unlocked ? "" : "grayscale opacity-40"}`}
+                  />
+                ) : null}
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-black">{sticker?.title ?? "Figurinha"}</p>
+                  <p className="text-xs font-semibold text-slate-500">{done ? "Liberada" : "Bloqueada até concluir"}</p>
+                </div>
               </div>
 
               <div className="mt-4 flex gap-3">
@@ -603,7 +1050,7 @@ function MissionsPanel({
 
 function StickerPanel({ unlockedStickerIds }: { unlockedStickerIds: string[] }) {
   return (
-    <section className="mt-7">
+    <section className="mt-6">
       <div className="flex items-end justify-between">
         <div>
           <p className="text-sm font-black uppercase tracking-[0.18em] text-pink-500">Figurinhas</p>
@@ -612,7 +1059,11 @@ function StickerPanel({ unlockedStickerIds }: { unlockedStickerIds: string[] }) 
         <Sparkles className="h-9 w-9 text-pink-500" />
       </div>
 
-      <div className="mt-5 overflow-hidden rounded-[28px] border border-pink-100 bg-pink-50">
+      <div className="mt-3 rounded-[22px] bg-pink-50 p-4 text-sm font-bold text-pink-700">
+        {unlockedStickerIds.length}/{stickers.length} liberadas. Complete tarefas para abrir o pack.
+      </div>
+
+      <div className="mt-4 overflow-hidden rounded-[26px] border border-pink-100 bg-pink-50">
         <Image
           src="/stickers/lorena-stickers-sheet.png"
           alt="Pack de figurinhas da Lorena"
@@ -622,13 +1073,13 @@ function StickerPanel({ unlockedStickerIds }: { unlockedStickerIds: string[] }) 
         />
       </div>
 
-      <div className="mt-5 grid grid-cols-3 gap-3">
+      <div className="mt-4 grid grid-cols-3 gap-3">
         {stickers.map((sticker) => {
           const unlocked = unlockedStickerIds.includes(sticker.id);
           return (
             <div
               key={sticker.id}
-              className={`relative min-h-[136px] overflow-hidden rounded-[24px] border bg-white p-2 shadow-sm ${
+              className={`relative min-h-[132px] overflow-hidden rounded-[22px] border bg-white p-2 shadow-sm ${
                 unlocked ? "border-pink-100" : "border-slate-100"
               }`}
             >
@@ -657,22 +1108,22 @@ function StickerPanel({ unlockedStickerIds }: { unlockedStickerIds: string[] }) 
 
 function RewardCard({ mission, onRequestReward }: { mission: Mission; onRequestReward: () => void }) {
   return (
-    <section className="mt-6 rounded-[28px] border border-yellow-200 bg-gradient-to-r from-yellow-50 to-white p-4 shadow-lg shadow-yellow-900/5">
+    <section className="mt-4 rounded-[26px] border border-yellow-200 bg-gradient-to-r from-yellow-50 to-white p-4 shadow-lg shadow-yellow-900/5">
       <div className="flex items-center gap-4">
-        <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-yellow-100 text-pink-500">
-          <Gift className="h-9 w-9" />
+        <div className="flex h-[60px] w-[60px] items-center justify-center rounded-2xl bg-yellow-100 text-pink-500">
+          <Gift className="h-8 w-8" />
         </div>
         <div className="min-w-0 flex-1">
-          <h3 className="text-xl font-black">Pedido para o papai</h3>
+          <h3 className="text-lg font-black">Pedir ao papai</h3>
           <p className="mt-1 text-sm leading-snug text-slate-500">{mission.reward}</p>
         </div>
         <button
           type="button"
           onClick={onRequestReward}
-          className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full bg-[#25d366] text-white shadow-xl shadow-emerald-500/25 transition active:scale-95"
+          className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-[#25d366] text-white shadow-xl shadow-emerald-500/25 transition active:scale-95"
           title="Enviar pedido pelo WhatsApp"
         >
-          <span className="text-3xl font-black">☎</span>
+          <span className="text-2xl font-black">☎</span>
         </button>
       </div>
     </section>
@@ -687,7 +1138,7 @@ function BottomNavigation({
   setActiveTab: (tab: TabId) => void;
 }) {
   return (
-    <nav className="mt-6 rounded-full border border-pink-100 bg-white/95 p-2 shadow-xl shadow-pink-950/10 backdrop-blur">
+    <nav className="mt-5 rounded-full border border-pink-100 bg-white/95 p-2 shadow-xl shadow-pink-950/10 backdrop-blur">
       <div className="grid grid-cols-3 gap-1">
         {bottomNav.map((item) => {
           const Icon = item.icon;
@@ -697,7 +1148,7 @@ function BottomNavigation({
               key={item.id}
               type="button"
               onClick={() => setActiveTab(item.id as TabId)}
-              className={`flex h-14 items-center justify-center gap-2 rounded-full text-sm font-black transition active:scale-95 ${
+              className={`flex h-[52px] items-center justify-center gap-1.5 rounded-full text-[13px] font-black transition active:scale-95 ${
                 selected ? "bg-pink-50 text-pink-500" : "text-slate-500"
               }`}
             >
@@ -711,11 +1162,61 @@ function BottomNavigation({
   );
 }
 
-function TargetIcon() {
+function cleanForSpeech(text: string) {
+  return text
+    .replace(/\*\*/g, "")
+    .replace(/[#*_`>]/g, "")
+    .replace(/\[(.*?)\]\(.*?\)/g, "$1")
+    .replace(/\s+/g, " ")
+    .slice(0, 1100);
+}
+
+function pickVoice(voices: SpeechSynthesisVoice[]) {
+  const ptVoices = voices.filter((voice) => voice.lang.toLowerCase().startsWith("pt"));
+  const maleNames = ["daniel", "antonio", "antônio", "ricardo", "carlos", "felipe", "male", "mascul"];
   return (
-    <span className="relative flex h-8 w-8 items-center justify-center rounded-full border-4 border-red-400">
-      <span className="h-3 w-3 rounded-full bg-red-500" />
-      <span className="absolute -right-1 -top-1 text-lg">🎯</span>
-    </span>
+    ptVoices.find((voice) => maleNames.some((name) => voice.name.toLowerCase().includes(name))) ||
+    ptVoices.find((voice) => voice.lang.toLowerCase() === "pt-br") ||
+    ptVoices[0] ||
+    voices[0]
   );
+}
+
+async function prepareImage(file: File): Promise<PreparedImage> {
+  const dataUrl = await fileToDataUrl(file);
+  const image = await loadImage(dataUrl);
+  const maxSide = 1280;
+  const scale = Math.min(1, maxSide / Math.max(image.width, image.height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(image.width * scale));
+  canvas.height = Math.max(1, Math.round(image.height * scale));
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("Canvas unavailable");
+  context.drawImage(image, 0, 0, canvas.width, canvas.height);
+  const preview = canvas.toDataURL("image/jpeg", 0.82);
+  const data = preview.split(",")[1];
+  if (!data) throw new Error("Image conversion failed");
+  return { data, mimeType: "image/jpeg", preview };
+}
+
+function loadImage(src: string) {
+  return new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new window.Image();
+    image.onload = () => resolve(image);
+    image.onerror = reject;
+    image.src = src;
+  });
+}
+
+function fileToDataUrl(file: Blob) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function blobToDataUrl(blob: Blob) {
+  return fileToDataUrl(blob);
 }
