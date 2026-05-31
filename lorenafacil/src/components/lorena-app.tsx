@@ -66,6 +66,8 @@ declare global {
 }
 
 const STORAGE_KEY = "lorena_facil_state_v2";
+const VOICE_STORAGE_KEY = "lorena_facil_voice_v1";
+const AUTOMATIC_VOICE = "auto";
 
 const initialMessages: ChatMessage[] = [
   {
@@ -98,6 +100,7 @@ export function LorenaApp() {
   const [floatingXp, setFloatingXp] = useState("");
   const [hydrated, setHydrated] = useState(false);
   const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [selectedVoiceName, setSelectedVoiceName] = useState(AUTOMATIC_VOICE);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
@@ -119,9 +122,12 @@ export function LorenaApp() {
           setUnlockedStickerIds(Array.isArray(parsed.unlockedStickerIds) ? parsed.unlockedStickerIds : []);
           setMessages(Array.isArray(parsed.messages) ? parsed.messages : initialMessages);
           setRewardRequests(Array.isArray(parsed.rewardRequests) ? parsed.rewardRequests : []);
+          setSelectedVoiceName(window.localStorage.getItem(VOICE_STORAGE_KEY) || AUTOMATIC_VOICE);
         } catch {
           window.localStorage.removeItem(STORAGE_KEY);
         }
+      } else {
+        setSelectedVoiceName(window.localStorage.getItem(VOICE_STORAGE_KEY) || AUTOMATIC_VOICE);
       }
       setHydrated(true);
     }, 0);
@@ -156,6 +162,11 @@ export function LorenaApp() {
       window.speechSynthesis.onvoiceschanged = null;
     };
   }, []);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    window.localStorage.setItem(VOICE_STORAGE_KEY, selectedVoiceName);
+  }, [hydrated, selectedVoiceName]);
 
   useEffect(() => {
     return () => {
@@ -480,17 +491,21 @@ export function LorenaApp() {
     });
   }
 
+  function testVoice() {
+    speakTutor("Oi, Lorena! Essa é a voz que eu vou usar para estudar com você.");
+  }
+
   function speakTutor(text?: string) {
     if (!isVoiceEnabled || !text || !("speechSynthesis" in window)) return;
 
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(cleanForSpeech(text));
     const voices = availableVoices.length ? availableVoices : window.speechSynthesis.getVoices();
-    const voice = pickVoice(voices);
+    const voice = pickVoice(voices, selectedVoiceName);
     if (voice) utterance.voice = voice;
-    utterance.lang = "pt-BR";
-    utterance.rate = 1.08;
-    utterance.pitch = 0.92;
+    utterance.lang = voice?.lang || "pt-BR";
+    utterance.rate = 1.15;
+    utterance.pitch = 1;
     window.speechSynthesis.speak(utterance);
   }
 
@@ -503,7 +518,6 @@ export function LorenaApp() {
       ) : null}
 
       <div className="mx-auto min-h-screen w-full max-w-[430px] bg-white px-4 pb-4 pt-2 shadow-2xl shadow-pink-950/5 md:my-6 md:rounded-[38px]">
-        <PhoneStatusBar />
         <Header streak={streak} />
 
         {activeTab === "tutor" ? (
@@ -527,16 +541,20 @@ export function LorenaApp() {
               if (id === "missions" || id === "stickers") setActiveTab(id);
             }}
             onSpeakLatest={() => speakTutor(latestAssistant?.text)}
+            onTestVoice={testVoice}
             onToggleVoice={toggleVoice}
             onVoiceTap={toggleVoiceRecording}
+            onVoiceChange={setSelectedVoiceName}
             photoName={photoName}
             photoPreview={photoPreview}
             recentReward={recentReward}
             selectedSubject={selectedSubject}
             selectedSubjectData={selectedSubjectData}
+            selectedVoiceName={selectedVoiceName}
             setSelectedSubject={setSelectedSubject}
             totalMissions={totalMissions}
             unlockedStickerCount={unlockedStickerIds.length}
+            voices={availableVoices}
             voiceHint={voiceHint}
             xp={xp}
           />
@@ -568,32 +586,9 @@ export function LorenaApp() {
   );
 }
 
-function PhoneStatusBar() {
-  return (
-    <div className="flex items-center justify-between px-2 py-2 text-black">
-      <span className="text-lg font-bold tracking-tight">9:41</span>
-      <div className="flex items-center gap-2">
-        <div className="flex h-5 items-end gap-0.5">
-          <span className="h-2 w-1 rounded-full bg-black" />
-          <span className="h-3 w-1 rounded-full bg-black" />
-          <span className="h-4 w-1 rounded-full bg-black" />
-          <span className="h-5 w-1 rounded-full bg-black" />
-        </div>
-        <div className="relative h-4 w-5">
-          <span className="absolute left-0 top-0 h-4 w-5 rounded-t-full border-[3px] border-b-0 border-black" />
-          <span className="absolute left-1.5 top-2 h-2 w-2 rounded-t-full border-[3px] border-b-0 border-black" />
-        </div>
-        <div className="h-4 w-7 rounded border-2 border-black p-0.5">
-          <span className="block h-full w-5 rounded-sm bg-black" />
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function Header({ streak }: { streak: number }) {
   return (
-    <header className="mt-4 flex items-center justify-between">
+    <header className="mt-5 flex items-center justify-between">
       <div className="flex items-center gap-3">
         <div className="relative flex h-[52px] w-[52px] items-center justify-center rounded-[17px] bg-gradient-to-br from-pink-500 to-fuchsia-500 text-white shadow-lg shadow-pink-500/20">
           <span className="absolute left-3.5 top-3 h-7 w-1.5 rounded-full bg-white/80" />
@@ -650,16 +645,20 @@ function TutorHome({
   onSendMessage,
   onShortcut,
   onSpeakLatest,
+  onTestVoice,
   onToggleVoice,
+  onVoiceChange,
   onVoiceTap,
   photoName,
   photoPreview,
   recentReward,
   selectedSubject,
   selectedSubjectData,
+  selectedVoiceName,
   setSelectedSubject,
   totalMissions,
   unlockedStickerCount,
+  voices,
   voiceHint,
   xp,
 }: {
@@ -680,16 +679,20 @@ function TutorHome({
   onSendMessage: (event: FormEvent<HTMLFormElement>) => void;
   onShortcut: (id: string) => void;
   onSpeakLatest: () => void;
+  onTestVoice: () => void;
   onToggleVoice: () => void;
+  onVoiceChange: (voiceName: string) => void;
   onVoiceTap: () => void;
   photoName: string;
   photoPreview: string | null;
   recentReward: Mission | null;
   selectedSubject: SubjectId;
   selectedSubjectData: (typeof subjects)[number];
+  selectedVoiceName: string;
   setSelectedSubject: (subjectId: SubjectId) => void;
   totalMissions: number;
   unlockedStickerCount: number;
+  voices: SpeechSynthesisVoice[];
   voiceHint: string;
   xp: number;
 }) {
@@ -786,6 +789,14 @@ function TutorHome({
       <div className="mt-3 rounded-[20px] bg-slate-50 px-4 py-3 text-sm font-bold leading-snug text-slate-500">
         {isListening ? "Gravando sua voz. Fale pertinho do celular." : isReadingPhoto ? "Estou lendo a foto da atividade." : voiceHint}
       </div>
+
+      <VoicePicker
+        enabled={isVoiceEnabled}
+        onChange={onVoiceChange}
+        onTestVoice={onTestVoice}
+        selectedVoiceName={selectedVoiceName}
+        voices={voices}
+      />
 
       {photoPreview ? (
         <div className="mt-3 flex items-center gap-3 rounded-[22px] border border-pink-100 bg-white p-3 shadow-sm">
@@ -908,6 +919,56 @@ function HeroAction({
       <span className="mt-1 text-[17px] leading-tight">{label}</span>
       <span className="mt-0.5 text-[11px] font-extrabold leading-tight text-slate-500">{sublabel}</span>
     </button>
+  );
+}
+
+function VoicePicker({
+  enabled,
+  onChange,
+  onTestVoice,
+  selectedVoiceName,
+  voices,
+}: {
+  enabled: boolean;
+  onChange: (voiceName: string) => void;
+  onTestVoice: () => void;
+  selectedVoiceName: string;
+  voices: SpeechSynthesisVoice[];
+}) {
+  const voiceOptions = voices.filter((voice) => voice.lang.toLowerCase().startsWith("pt"));
+
+  return (
+    <section className="mt-3 rounded-[20px] border border-pink-100 bg-white p-3 shadow-sm">
+      <div className="flex items-center gap-2">
+        <label className="min-w-0 flex-1">
+          <span className="mb-1 block text-xs font-black text-pink-500">Voz do tutor</span>
+          <select
+            value={selectedVoiceName}
+            onChange={(event) => onChange(event.target.value)}
+            className="h-11 w-full rounded-full border border-pink-100 bg-pink-50 px-3 text-sm font-black text-[#17183f] outline-none"
+          >
+            <option value={AUTOMATIC_VOICE}>Automática, igual Lucas</option>
+            {voiceOptions.map((voice) => (
+              <option key={`${voice.name}-${voice.lang}`} value={voice.name}>
+                {voice.name} ({voice.lang})
+              </option>
+            ))}
+          </select>
+        </label>
+        <button
+          type="button"
+          onClick={onTestVoice}
+          disabled={!enabled}
+          className="mt-5 flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-pink-500 text-white shadow-lg shadow-pink-500/20 transition active:scale-95 disabled:bg-slate-200 disabled:text-slate-400"
+          title="Testar voz"
+        >
+          <Volume2 className="h-5 w-5" />
+        </button>
+      </div>
+      <p className="mt-2 text-xs font-semibold leading-snug text-slate-500">
+        No celular, as vozes Google ou Samsung costumam soar mais naturais.
+      </p>
+    </section>
   );
 }
 
@@ -1167,11 +1228,17 @@ function cleanForSpeech(text: string) {
     .replace(/\*\*/g, "")
     .replace(/[#*_`>]/g, "")
     .replace(/\[(.*?)\]\(.*?\)/g, "$1")
+    .replace(/^\s*[-•]\s*/gm, "")
     .replace(/\s+/g, " ")
     .slice(0, 1100);
 }
 
-function pickVoice(voices: SpeechSynthesisVoice[]) {
+function pickVoice(voices: SpeechSynthesisVoice[], selectedVoiceName: string) {
+  if (selectedVoiceName === AUTOMATIC_VOICE) return undefined;
+
+  const selected = voices.find((voice) => voice.name === selectedVoiceName);
+  if (selected) return selected;
+
   const ptVoices = voices.filter((voice) => voice.lang.toLowerCase().startsWith("pt"));
   const maleNames = ["daniel", "antonio", "antônio", "ricardo", "carlos", "felipe", "male", "mascul"];
   return (

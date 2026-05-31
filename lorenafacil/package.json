@@ -7,10 +7,17 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "android:sync": "cap sync android",
+    "android:open": "cap open android",
+    "apk:debug": "sh scripts/build-android-apk.sh debug",
+    "apk:release": "sh scripts/build-android-apk.sh release",
     "convex:dev": "CONVEX_AGENT_MODE=anonymous convex dev",
     "convex:once": "CONVEX_AGENT_MODE=anonymous convex dev --once"
   },
   "dependencies": {
+    "@capacitor/android": "^8.3.4",
+    "@capacitor/cli": "^8.3.4",
+    "@capacitor/core": "^8.3.4",
     "convex": "^1.39.1",
     "lucide-react": "^1.17.0",
     "next": "16.2.6",

@@ -15,6 +15,7 @@ App mobile-first para a Lorena, aluna do 5º ano, com tutores de História e Ing
 - Convex
 - Gemini API server-side
 - Vercel
+- Capacitor Android
 
 ## Desenvolvimento
 
@@ -42,3 +43,23 @@ npm run convex:once
 ```
 
 Depois rode `seed:seedInitialData` no painel/CLI do Convex para popular Lorena, matérias, missões e figurinhas.
+
+## APK Android
+
+O APK é um wrapper Capacitor do app em produção (`https://lorenafacil.vercel.app`), com ícone personalizado da Lorena e permissões de câmera/microfone.
+
+```bash
+npm run apk:debug
+```
+
+Arquivo gerado:
+
+```text
+android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+Para abrir no Android Studio:
+
+```bash
+npm run android:open
+```
