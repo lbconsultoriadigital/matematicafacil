@@ -31,6 +31,9 @@ Abra `http://localhost:3000`.
 Crie `.env.local` a partir de `.env.example`.
 
 - `GEMINI_API_KEY`: chave server-side para os agentes.
+- `GEMINI_TTS_MODEL`: modelo de voz do Gemini. Padrão: `gemini-2.5-pro-preview-tts`.
+- `GEMINI_TTS_VOICE`: voz prebuilt do Gemini. Padrão: `Puck`.
+- `GEMINI_TTS_INSTRUCTIONS`: instruções de estilo para a voz humanizada.
 - `NEXT_PUBLIC_CONVEX_URL`: URL pública do Convex.
 - `PARENT_WHATSAPP_NUMBER`: número do pai. Padrão: `5511994465011`.
 - `LORENA_ACCESS_PIN`: senha numérica para abrir o app. Padrão temporário: `2505`.

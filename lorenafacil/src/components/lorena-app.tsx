@@ -67,8 +67,6 @@ declare global {
 }
 
 const STORAGE_KEY = "lorena_facil_state_v2";
-const VOICE_STORAGE_KEY = "lorena_facil_voice_v1";
-const AUTOMATIC_VOICE = "auto";
 
 const initialMessages: ChatMessage[] = [
   {
@@ -101,8 +99,9 @@ export function LorenaApp() {
   const [floatingXp, setFloatingXp] = useState("");
   const [hydrated, setHydrated] = useState(false);
   const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
-  const [selectedVoiceName, setSelectedVoiceName] = useState(AUTOMATIC_VOICE);
 
+  const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
+  const audioUrlRef = useRef<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
@@ -123,12 +122,9 @@ export function LorenaApp() {
           setUnlockedStickerIds(Array.isArray(parsed.unlockedStickerIds) ? parsed.unlockedStickerIds : []);
           setMessages(Array.isArray(parsed.messages) ? parsed.messages : initialMessages);
           setRewardRequests(Array.isArray(parsed.rewardRequests) ? parsed.rewardRequests : []);
-          setSelectedVoiceName(window.localStorage.getItem(VOICE_STORAGE_KEY) || AUTOMATIC_VOICE);
         } catch {
           window.localStorage.removeItem(STORAGE_KEY);
         }
-      } else {
-        setSelectedVoiceName(window.localStorage.getItem(VOICE_STORAGE_KEY) || AUTOMATIC_VOICE);
       }
       setHydrated(true);
     }, 0);
@@ -159,18 +155,14 @@ export function LorenaApp() {
     window.speechSynthesis.onvoiceschanged = loadVoices;
 
     return () => {
-      window.speechSynthesis.cancel();
+      stopTutorVoice();
       window.speechSynthesis.onvoiceschanged = null;
     };
   }, []);
 
   useEffect(() => {
-    if (!hydrated) return;
-    window.localStorage.setItem(VOICE_STORAGE_KEY, selectedVoiceName);
-  }, [hydrated, selectedVoiceName]);
-
-  useEffect(() => {
     return () => {
+      stopTutorVoice();
       stopRecordingTracks();
       if (recordingTimerRef.current) {
         window.clearTimeout(recordingTimerRef.current);
@@ -290,7 +282,7 @@ export function LorenaApp() {
           subjectId: selectedSubject,
         },
       ]);
-      speakTutor(answer);
+      void speakTutor(answer);
     } catch {
       const answer = "Não consegui responder agora. Sua pergunta ficou salva aqui para tentarmos de novo.";
       setMessages((current) => [
@@ -303,7 +295,7 @@ export function LorenaApp() {
           subjectId: selectedSubject,
         },
       ]);
-      speakTutor(answer);
+      void speakTutor(answer);
     } finally {
       setIsSending(false);
     }
@@ -487,27 +479,98 @@ export function LorenaApp() {
 
   function toggleVoice() {
     setIsVoiceEnabled((enabled) => {
-      if (enabled) window.speechSynthesis?.cancel();
+      if (enabled) stopTutorVoice();
       return !enabled;
     });
   }
 
-  function testVoice() {
-    speakTutor("Oi, Lorena! Essa é a voz que eu vou usar para estudar com você.");
+  async function speakTutor(text?: string) {
+    if (!isVoiceEnabled || !text) return;
+
+    const textToRead = cleanForSpeech(text);
+    if (!textToRead) return;
+
+    stopTutorVoice();
+
+    try {
+      const response = await fetch(apiUrl("/api/voice"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: textToRead }),
+      });
+
+      if (!response.ok) throw new Error("premium voice unavailable");
+
+      const audioBlob = await response.blob();
+      await playAudioBlob(audioBlob);
+    } catch {
+      speakWithBrowserVoice(textToRead);
+    }
   }
 
-  function speakTutor(text?: string) {
-    if (!isVoiceEnabled || !text || !("speechSynthesis" in window)) return;
+  function speakWithBrowserVoice(textToRead: string) {
+    if (!("speechSynthesis" in window)) return;
 
     window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(cleanForSpeech(text));
+    const utterance = new SpeechSynthesisUtterance(textToRead);
     const voices = availableVoices.length ? availableVoices : window.speechSynthesis.getVoices();
-    const voice = pickVoice(voices, selectedVoiceName);
+    const voice = pickVoice(voices);
     if (voice) utterance.voice = voice;
     utterance.lang = voice?.lang || "pt-BR";
-    utterance.rate = 1.15;
-    utterance.pitch = 1;
+    utterance.rate = 0.92;
+    utterance.pitch = 1.05;
+    utterance.volume = 1;
     window.speechSynthesis.speak(utterance);
+  }
+
+  function playAudioBlob(audioBlob: Blob) {
+    return new Promise<void>((resolve, reject) => {
+      if (audioPlayerRef.current) {
+        audioPlayerRef.current.pause();
+        audioPlayerRef.current = null;
+      }
+      if (audioUrlRef.current) {
+        URL.revokeObjectURL(audioUrlRef.current);
+        audioUrlRef.current = null;
+      }
+
+      const audioUrl = URL.createObjectURL(audioBlob);
+      const audio = new Audio(audioUrl);
+      audioUrlRef.current = audioUrl;
+      audioPlayerRef.current = audio;
+
+      const cleanup = () => {
+        URL.revokeObjectURL(audioUrl);
+        if (audioUrlRef.current === audioUrl) audioUrlRef.current = null;
+        if (audioPlayerRef.current === audio) audioPlayerRef.current = null;
+      };
+
+      audio.onended = cleanup;
+      audio.onerror = () => {
+        cleanup();
+        reject(new Error("audio playback failed"));
+      };
+
+      audio
+        .play()
+        .then(() => resolve())
+        .catch((error: unknown) => {
+          cleanup();
+          reject(error);
+        });
+    });
+  }
+
+  function stopTutorVoice() {
+    window.speechSynthesis?.cancel();
+    if (audioPlayerRef.current) {
+      audioPlayerRef.current.pause();
+      audioPlayerRef.current = null;
+    }
+    if (audioUrlRef.current) {
+      URL.revokeObjectURL(audioUrlRef.current);
+      audioUrlRef.current = null;
+    }
   }
 
   return (
@@ -541,21 +604,17 @@ export function LorenaApp() {
             onShortcut={(id) => {
               if (id === "missions" || id === "stickers") setActiveTab(id);
             }}
-            onSpeakLatest={() => speakTutor(latestAssistant?.text)}
-            onTestVoice={testVoice}
+            onSpeakLatest={() => void speakTutor(latestAssistant?.text)}
             onToggleVoice={toggleVoice}
             onVoiceTap={toggleVoiceRecording}
-            onVoiceChange={setSelectedVoiceName}
             photoName={photoName}
             photoPreview={photoPreview}
             recentReward={recentReward}
             selectedSubject={selectedSubject}
             selectedSubjectData={selectedSubjectData}
-            selectedVoiceName={selectedVoiceName}
             setSelectedSubject={setSelectedSubject}
             totalMissions={totalMissions}
             unlockedStickerCount={unlockedStickerIds.length}
-            voices={availableVoices}
             voiceHint={voiceHint}
             xp={xp}
           />
@@ -646,20 +705,16 @@ function TutorHome({
   onSendMessage,
   onShortcut,
   onSpeakLatest,
-  onTestVoice,
   onToggleVoice,
-  onVoiceChange,
   onVoiceTap,
   photoName,
   photoPreview,
   recentReward,
   selectedSubject,
   selectedSubjectData,
-  selectedVoiceName,
   setSelectedSubject,
   totalMissions,
   unlockedStickerCount,
-  voices,
   voiceHint,
   xp,
 }: {
@@ -680,20 +735,16 @@ function TutorHome({
   onSendMessage: (event: FormEvent<HTMLFormElement>) => void;
   onShortcut: (id: string) => void;
   onSpeakLatest: () => void;
-  onTestVoice: () => void;
   onToggleVoice: () => void;
-  onVoiceChange: (voiceName: string) => void;
   onVoiceTap: () => void;
   photoName: string;
   photoPreview: string | null;
   recentReward: Mission | null;
   selectedSubject: SubjectId;
   selectedSubjectData: (typeof subjects)[number];
-  selectedVoiceName: string;
   setSelectedSubject: (subjectId: SubjectId) => void;
   totalMissions: number;
   unlockedStickerCount: number;
-  voices: SpeechSynthesisVoice[];
   voiceHint: string;
   xp: number;
 }) {
@@ -790,14 +841,6 @@ function TutorHome({
       <div className="mt-3 rounded-[20px] bg-slate-50 px-4 py-3 text-sm font-bold leading-snug text-slate-500">
         {isListening ? "Gravando sua voz. Fale pertinho do celular." : isReadingPhoto ? "Estou lendo a foto da atividade." : voiceHint}
       </div>
-
-      <VoicePicker
-        enabled={isVoiceEnabled}
-        onChange={onVoiceChange}
-        onTestVoice={onTestVoice}
-        selectedVoiceName={selectedVoiceName}
-        voices={voices}
-      />
 
       {photoPreview ? (
         <div className="mt-3 flex items-center gap-3 rounded-[22px] border border-pink-100 bg-white p-3 shadow-sm">
@@ -920,56 +963,6 @@ function HeroAction({
       <span className="mt-1 text-[17px] leading-tight">{label}</span>
       <span className="mt-0.5 text-[11px] font-extrabold leading-tight text-slate-500">{sublabel}</span>
     </button>
-  );
-}
-
-function VoicePicker({
-  enabled,
-  onChange,
-  onTestVoice,
-  selectedVoiceName,
-  voices,
-}: {
-  enabled: boolean;
-  onChange: (voiceName: string) => void;
-  onTestVoice: () => void;
-  selectedVoiceName: string;
-  voices: SpeechSynthesisVoice[];
-}) {
-  const voiceOptions = voices.filter((voice) => voice.lang.toLowerCase().startsWith("pt"));
-
-  return (
-    <section className="mt-3 rounded-[20px] border border-pink-100 bg-white p-3 shadow-sm">
-      <div className="flex items-center gap-2">
-        <label className="min-w-0 flex-1">
-          <span className="mb-1 block text-xs font-black text-pink-500">Voz do tutor</span>
-          <select
-            value={selectedVoiceName}
-            onChange={(event) => onChange(event.target.value)}
-            className="h-11 w-full rounded-full border border-pink-100 bg-pink-50 px-3 text-sm font-black text-[#17183f] outline-none"
-          >
-            <option value={AUTOMATIC_VOICE}>Automática, igual Lucas</option>
-            {voiceOptions.map((voice) => (
-              <option key={`${voice.name}-${voice.lang}`} value={voice.name}>
-                {voice.name} ({voice.lang})
-              </option>
-            ))}
-          </select>
-        </label>
-        <button
-          type="button"
-          onClick={onTestVoice}
-          disabled={!enabled}
-          className="mt-5 flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-pink-500 text-white shadow-lg shadow-pink-500/20 transition active:scale-95 disabled:bg-slate-200 disabled:text-slate-400"
-          title="Testar voz"
-        >
-          <Volume2 className="h-5 w-5" />
-        </button>
-      </div>
-      <p className="mt-2 text-xs font-semibold leading-snug text-slate-500">
-        No celular, as vozes Google ou Samsung costumam soar mais naturais.
-      </p>
-    </section>
   );
 }
 
@@ -1234,20 +1227,26 @@ function cleanForSpeech(text: string) {
     .slice(0, 1100);
 }
 
-function pickVoice(voices: SpeechSynthesisVoice[], selectedVoiceName: string) {
-  if (selectedVoiceName === AUTOMATIC_VOICE) return undefined;
+function pickVoice(voices: SpeechSynthesisVoice[]) {
+  if (!voices.length) return null;
 
-  const selected = voices.find((voice) => voice.name === selectedVoiceName);
-  if (selected) return selected;
+  return [...voices].sort((voiceA, voiceB) => scoreVoice(voiceB) - scoreVoice(voiceA))[0] ?? null;
+}
 
-  const ptVoices = voices.filter((voice) => voice.lang.toLowerCase().startsWith("pt"));
-  const maleNames = ["daniel", "antonio", "antônio", "ricardo", "carlos", "felipe", "male", "mascul"];
-  return (
-    ptVoices.find((voice) => maleNames.some((name) => voice.name.toLowerCase().includes(name))) ||
-    ptVoices.find((voice) => voice.lang.toLowerCase() === "pt-br") ||
-    ptVoices[0] ||
-    voices[0]
-  );
+function scoreVoice(voice: SpeechSynthesisVoice) {
+  const label = `${voice.name} ${voice.lang}`.toLowerCase();
+  let score = 0;
+
+  if (voice.lang.toLowerCase() === "pt-br") score += 100;
+  else if (voice.lang.toLowerCase().startsWith("pt")) score += 70;
+
+  if (label.includes("google")) score += 18;
+  if (label.includes("microsoft")) score += 16;
+  if (label.includes("luciana") || label.includes("maria") || label.includes("francisca")) score += 12;
+  if (label.includes("premium") || label.includes("enhanced") || label.includes("natural")) score += 10;
+  if (voice.localService) score += 4;
+
+  return score;
 }
 
 async function prepareImage(file: File): Promise<PreparedImage> {

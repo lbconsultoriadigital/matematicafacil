@@ -36,7 +36,10 @@ export async function proxy(request: NextRequest) {
     return NextResponse.next();
   }
 
-  if ((pathname === "/api/tutor" || pathname === "/api/reward") && isCapacitorOrigin(request)) {
+  if (
+    (pathname === "/api/tutor" || pathname === "/api/reward" || pathname === "/api/voice") &&
+    isCapacitorOrigin(request)
+  ) {
     return NextResponse.next();
   }
 
