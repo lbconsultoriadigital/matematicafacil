@@ -1,0 +1,38 @@
+{
+  "name": "lorenafacil",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "build:android-web": "CAPACITOR_STATIC_EXPORT=1 NEXT_PUBLIC_API_BASE_URL=https://lorenafacil.vercel.app next build",
+    "start": "next start",
+    "lint": "eslint",
+    "android:sync": "npm run build:android-web && cap sync android",
+    "android:open": "cap open android",
+    "apk:debug": "sh scripts/build-android-apk.sh debug",
+    "apk:release": "sh scripts/build-android-apk.sh release",
+    "convex:dev": "CONVEX_AGENT_MODE=anonymous convex dev",
+    "convex:once": "CONVEX_AGENT_MODE=anonymous convex dev --once"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.3.4",
+    "@capacitor/cli": "^8.3.4",
+    "@capacitor/core": "^8.3.4",
+    "convex": "^1.39.1",
+    "lucide-react": "^1.17.0",
+    "next": "16.2.6",
+    "react": "19.2.4",
+    "react-dom": "19.2.4"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.2.6",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
+}
